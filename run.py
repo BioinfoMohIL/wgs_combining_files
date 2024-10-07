@@ -10,6 +10,15 @@ def return_extention(f):
     _, file_extension = os.path.splitext(f)
     return file_extension
 
+def read_table_file(file_name, ext):
+    if ext == '.csv':
+        df = pd.read_csv(file_name)
+    elif ext == '.xlsx':
+        df = pd.read_excel(file_name)
+    else:
+        exit("Unsupported file format")
+    return df
+
 def fetch_filename(data_folder, file_name):
     file_path = os.path.join(data_folder, file_name)
     file_name = os.path.basename(file_path)
@@ -69,11 +78,18 @@ def sort_df(df, col_name):
     df['numeric_part'] = df[col_name].str.extract('(\d+)').astype(int)
     return df.sort_values(by='numeric_part', ascending=True).drop(columns='numeric_part')
 
-def create_table_df():
+def create_plate_df():
     df = pd.DataFrame(np.empty((8, 12), dtype=object))
     df.columns = [str(i + 1) for i in range(12)]
     df.index = [chr(65 + i) for i in range(8)]
 
+    return df
+
+def create_table_df():
+    index = [f"{chr(col)}{row}" for row in range(1, 13) for col in range(ord('A'), ord('H') + 1)]
+
+    df = pd.DataFrame(index=index)
+    df[SOURCE_NAME_COL] = '' 
     return df
 
 def color_header(ws, color):
@@ -84,13 +100,46 @@ def color_header(ws, color):
     for cell in ws['A']:
         cell.fill = PatternFill(start_color="ADD8E6", end_color="ADD8E6", fill_type='solid')
 
+
 def cells_to_highlight(df, star_run):
+    cells = []
+    cells_positions = {}
+   
+    current_df = df[df[STAR_RUN_COL] == star_run]
+
+    for _, row in current_df.iterrows():
+        cells.append(row[SAMPLES_CODES_COL])
+        cells_positions[row[TARGET_POSITION_COL]] = row[SAMPLES_CODES_COL]
+
+    return cells, cells_positions
+
+def populate_table(d, table, col):
+    for key, value in d.items():
+        table.loc[key, col] = value
+
+def create_new_tables_sheet(writer, tables, sheet_name):
+    rows = []
+    for key, df in tables.items():
+        rows.append([key,'',''])
+        rows.append(['','',SOURCE_NAME_COL])
+        for index, row in df.iterrows():
+            rows.append(['', index, row.values[0]])
+             
+         
+        rows.append(['','',''])
+            
+    result_df = pd.DataFrame(rows, columns=[None, None, None]) 
+    result_df.to_excel(writer, sheet_name=sheet_name, index=False)
+            
+    print("Excel file with tables by run created successfully.")
+
+def get_position(df, star_run):
     cells_positions = []
    
     current_df = df[df[STAR_RUN_COL] == star_run]
 
     for _, row in current_df.iterrows():
-        cells_positions.append(row[SAMPLES_CODES_COL])
+        cells_positions.append(row[TARGET_POSITION_COL])
 
     return cells_positions
 
@@ -113,13 +162,9 @@ def fetch_and_concatenate(df, data_folder):
 
             ext = return_extention(file_path)
 
-            if ext == '.csv':
-                df_star = pd.read_csv(file_path)
-            elif ext == '.xlsx':
-                df_star = pd.read_excel(file_path)
-            else:
-                exit("Unsupported file format")
+            df_star = read_table_file(file_path, ext)
 
+     
             # Ensure that columns are properly formatted (strip whitespace, lowercase)
             df_star.columns = df_star.columns.str.strip().str.lower()
             df.columns = df.columns.str.strip().str.lower()
@@ -145,7 +190,8 @@ def fetch_and_concatenate(df, data_folder):
     return df_result[[SAMPLES_CODES_COL, SOURCE_BARCODE_COL, TARGET_POSITION_COL, STAR_RUN_COL]]
 
 def create_tables(data_folder, df_sorted, output_file):
-
+    tables_by_run = {}  # Create tables to input Myra
+    
     with pd.ExcelWriter(output_file,  engine='openpyxl', mode='a') as writer:
         source_barcode = 'Source Barcode'   # with uppercases (!= in the first file - lowercase)
 
@@ -157,21 +203,17 @@ def create_tables(data_folder, df_sorted, output_file):
             if file_name.startswith('Star_0'):
                 file_name = fetch_filename(data_folder, file_name)
                 run_name = file_name.split('_')[1] 
+                
                 # Create df like 96w plate A -> H (rows), 1 -> 12 (cols)
-                df_plate = create_table_df() 
+                df_plate = create_plate_df() 
+                df_table = create_table_df() 
+                
                
                 file_name = os.path.join(data_folder, file_name)
                 
                 ext = return_extention(file_name)
 
-                if ext == '.csv':
-                    df = pd.read_csv(file_name)
-                elif ext == '.xlsx':
-                    df = pd.read_excel(file_name)
-                else:
-                    exit("Unsupported file format")
-                
-                # df = pd.read_csv(os.path.join(data_folder, file_name))
+                df = read_table_file(file_name, ext)
                 df = replace_hyphen_by_dot(df, source_barcode)
                 df = df.dropna()        # remove nan
 
@@ -187,14 +229,23 @@ def create_tables(data_folder, df_sorted, output_file):
                         df_plate.loc[plate_row, plate_col] = sample_code
 
 
-                df_plate.to_excel(writer, sheet_name=run_name)
+                cells, positions = cells_to_highlight(df_sorted, run_name)
                 
+                df_plate.to_excel(writer, sheet_name=run_name)
+               
+                populate_table(positions, df_table, SOURCE_NAME_COL)
+
                 # Color cells
                 ws = writer.sheets[run_name]
-                
-                cells = cells_to_highlight(df_sorted, run_name)
                 color_header(ws,'ADD8E6')
                 highlighting_cells(ws, cells)
+
+                # Create another table for Myra input
+                tables_by_run[run_name] = df_table
+
+    with pd.ExcelWriter(output_file,  engine='openpyxl', mode='a') as writer:
+        create_new_tables_sheet(writer, tables_by_run, 'tables')
+
 
 
 SERIAL_NUMBER         = 'Serial number'
@@ -205,6 +256,7 @@ TARGET_POSITION_COL   = "target position"
 SAMPLES_CODES_COL     = 'samples codes'
 STAR_RUN_COL          = 'star run'
 RESULTS_FILE          = 'results.xlsx'
+SOURCE_NAME_COL       = 'source name'
 
 data_dir = 'data'
 filtered_file = 'filtered_result.xlsx'
