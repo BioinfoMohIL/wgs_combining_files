@@ -3,8 +3,13 @@ import re
 import warnings
 import numpy as np
 import pandas as pd
-from openpyxl import Workbook, load_workbook
 from openpyxl.styles import PatternFill
+
+'''
+Combine the sending file (WGS_XXXX) with 'star' files :
+    according to the sample code in sending file, fetch the samples in the 'star' files
+    (these samples need to be run first)
+'''
 
 warnings.filterwarnings("ignore", category=UserWarning, module='openpyxl')
 
@@ -254,15 +259,15 @@ def create_tables(data_folder, df_sorted, output_file):
 
 
 
-SERIAL_NUMBER         = 'serial number'
+SERIAL_NUMBER_COL        = 'serial number'
 SAMPLES_CODES_COL     = "samples codes"
 PRODUCTION_DATE_COL   = "production date"
 SOURCE_BARCODE_COL    = "source barcode" 
 TARGET_POSITION_COL   = "target position"
 SAMPLES_CODES_COL     = 'samples codes'
 STAR_RUN_COL          = 'star run'
-RESULTS_FILE          = 'results.xlsx'
 SOURCE_NAME_COL       = 'source name'
+RESULTS_FILE          = 'results.xlsx'
 
 data_dir = 'data'
 filtered_file = 'filtered_result.xlsx'
@@ -284,7 +289,7 @@ df = pd.read_excel(sending_file, header=None)
 header_row = None
 for i, row in df.iterrows():
     row_str = row.astype(str).str.strip().str.lower()   # fix upper/lower case issue
-    if SERIAL_NUMBER in row_str.values:
+    if SERIAL_NUMBER_COL in row_str.values:
         header_row = i
         break
 
