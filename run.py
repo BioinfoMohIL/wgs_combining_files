@@ -1,5 +1,7 @@
 import os
 import re
+from datetime import datetime
+import logging
 import warnings
 import numpy as np
 import pandas as pd
@@ -12,6 +14,14 @@ Combine the sending file (WGS_XXXX) with 'star' files :
 '''
 
 warnings.filterwarnings("ignore", category=UserWarning, module='openpyxl')
+
+def create_dir(d):
+    if not os.path.exists(d):
+        try:
+            os.makedirs(d) 
+            logging.info(f"[create_dir] Successfully created directory: {results_dir}\n")
+        except Exception as e:
+            logging.error(f"[create_dir] Error occurred while creating directory {d}: {e}\n")
 
 def return_extention(f):
     _, file_extension = os.path.splitext(f)
@@ -141,8 +151,6 @@ def create_new_tables_sheet(writer, tables, sheet_name):
     result_df = pd.DataFrame(rows, columns=[None, None, None]) 
     result_df.to_excel(writer, sheet_name=sheet_name, index=False)
             
-    print("Excel file with tables by run created successfully.")
-
 def get_position(df, star_run):
     cells_positions = []
    
@@ -258,8 +266,7 @@ def create_tables(data_folder, df_sorted, output_file):
         create_new_tables_sheet(writer, tables_by_run, 'tables')
 
 
-
-SERIAL_NUMBER_COL        = 'serial number'
+SERIAL_NUMBER_COL     = 'serial number'
 SAMPLES_CODES_COL     = "samples codes"
 PRODUCTION_DATE_COL   = "production date"
 SOURCE_BARCODE_COL    = "source barcode" 
@@ -267,66 +274,121 @@ TARGET_POSITION_COL   = "target position"
 SAMPLES_CODES_COL     = 'samples codes'
 STAR_RUN_COL          = 'star run'
 SOURCE_NAME_COL       = 'source name'
-RESULTS_FILE          = 'results.xlsx'
 
-data_dir = 'data'
-filtered_file = 'filtered_result.xlsx'
+wd = os.path.dirname(os.path.realpath(__file__))
+results_dir = os.path.join(wd, 'results')
+logs_dir = os.path.join(wd, 'logs')
+
+now = datetime.now()
+formatted_date = now.strftime("%Y%m%d_%H%M%S")
+
+create_dir(results_dir)
+create_dir(logs_dir)
+
+log_file = os.path.join(logs_dir, f'logs_{formatted_date}.txt')
+logging.basicConfig(filename=log_file, level=logging.DEBUG, 
+                    format='%(asctime)s - %(levelname)s - %(message)s')
+
+
+data_dir        = os.path.join(wd, 'data')
+results_file    = os.path.join(results_dir, f'results_{formatted_date}.xlsx')
+filtered_file   = 'filtered_result.xlsx'
 concatened_file = 'concatenated_result.xlsx'
 
 
 ################################################################
 
 # [1 ]- Fetch 'Samples codes' and 'Production date' columns
-for i in os.listdir(data_dir):
-    if i.startswith('WGS'):
-        sending_file = os.path.join(data_dir, i)
-        break
-else:
-    exit('Cannot find your sending file')
+try:
+    for i in os.listdir(data_dir):
+        if i.startswith('WGS') or i.startswith('wgs'):
+            sending_file = os.path.join(data_dir, i)
+            break
+    else:
+        msg = 'Cannot find your sending file'
+        logging.error(f"[1.1] {msg} \n")
+        exit(msg) 
 
-df = pd.read_excel(sending_file, header=None)
-# Reaching the table because it doesn't start from the first file row
-header_row = None
-for i, row in df.iterrows():
-    row_str = row.astype(str).str.strip().str.lower()   # fix upper/lower case issue
-    if SERIAL_NUMBER_COL in row_str.values:
-        header_row = i
-        break
+    logging.info(f"[1.1] Successfully fetched 'sending' file\n")
+except Exception as e:
+    logging.error(f"[1.1] Error occurred while fetching 'sending' file: {e}\n")
 
-if header_row is not None:
-    df = pd.read_excel(sending_file, header=header_row)
-    
-    columns = fetch_columns(df, [SAMPLES_CODES_COL, PRODUCTION_DATE_COL])
 
-    df_filtered = df[columns]
-    df_filtered = replace_hyphen_by_dot(df_filtered, SAMPLES_CODES_COL)
-else:
-    print("Could not find the table header.")
+try:
+    df = pd.read_excel(sending_file, header=None)
+    # Reaching the table because it doesn't start from the first file row
+    header_row = None
+    for i, row in df.iterrows():
+        row_str = row.astype(str).str.strip().str.lower()   # fix upper/lower case issue
+        if SERIAL_NUMBER_COL in row_str.values:
+            header_row = i
+            break
 
+    if header_row is not None:
+        df = pd.read_excel(sending_file, header=header_row)
+        
+        columns = fetch_columns(df, [SAMPLES_CODES_COL, PRODUCTION_DATE_COL])
+
+        df_filtered = df[columns]
+        df_filtered = replace_hyphen_by_dot(df_filtered, SAMPLES_CODES_COL)
+        logging.info(f"[1.2] Successfully fetching header form'sending' file\n")
+
+    else:
+        logging.error(f"[1.2] Error occurred while fetching header form'sending' file: {e}\n")
+
+        exit("Could not find the table header.")
+
+except Exception as e:
+    logging.error(f"[1.2] Error occurred while fetching header form'sending' file: {e}\n")
 
 # [2] - Concate Star_0XX files
 directory = 'data'  
-df_results = fetch_and_concatenate(df_filtered, directory)
+try:
+    df_results = fetch_and_concatenate(df_filtered, directory)
+    logging.info(f"[2.1] Successfully fetching & concate 'star' files.\n")
+except Exception as e:
+    msg = f"[2.1] Error occurred while fetching & concate 'star' files: {e}\n"
+    logging.error(msg)
+    exit(msg)
+
 has_nan = df_results.isna().any().any()
 
 if has_nan:
     rows_with_nan = df_results[df_results.isna().any(axis=1)]
     
-    print(rows_with_nan)
-    df_filtered.to_csv('tmp.csv', index=False)
-    exit('Your data has Null values. Cannot Continue. Bye Bye')
+    msg = f'[2.2] Your data has Null values: {rows_with_nan}\n'
+    logging.error(msg)
+    exit(msg)
 
-df_sorted = sort_df(df_results, STAR_RUN_COL)
 
-with pd.ExcelWriter(RESULTS_FILE, engine='openpyxl') as writer:
-    df_filtered.to_excel(writer, sheet_name=filtered_file, index=False)
-    df_sorted.to_excel(writer, sheet_name=concatened_file, index=False)
+try:
+    df_sorted = sort_df(df_results, STAR_RUN_COL)
+    logging.info(f"[2.3] Successfully sorted values\n")
+except Exception as e:
+    msg = f"[2.3] Error occurred while sorting values: {e}\n"
+    logging.error(msg)
+    exit(msg)
 
+try:
+    with pd.ExcelWriter(results_file, engine='openpyxl') as writer:
+        df_filtered.to_excel(writer, sheet_name=filtered_file, index=False)
+        df_sorted.to_excel(writer, sheet_name=concatened_file, index=False)
+        
+        logging.info(f"[2.4] Successfully wrote excel table\n")
+except Exception as e:
+    msg = f"[2.4] Error occurred while writing excel table: {e}\n"
+    logging.error(msg)
+    exit(msg)
 
 # [3] - Create Tables
 # create like 96w table A1, B1, C1 ....
 # color the eva's samples
-create_tables(directory, df_sorted, RESULTS_FILE)
+try:
+    create_tables(directory, df_sorted, results_file)
+    logging.info('[2.5] Successfully created tables sheets (plates, long table)\n')
+    msg = 'The script ran successfully\n\n--- THE END ---'
+    logging.info(msg)
+    print(msg)
+except Exception as e:
+    logging.error(f"[2.5] Error occurred while creating tables sheets: {e}")
 
-
-print("Data merged successfully.")
