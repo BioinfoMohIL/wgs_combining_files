@@ -1,10 +1,12 @@
 import os
 import re
+import warnings
 import numpy as np
 import pandas as pd
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import PatternFill
 
+warnings.filterwarnings("ignore", category=UserWarning, module='openpyxl')
 
 def return_extention(f):
     _, file_extension = os.path.splitext(f)
@@ -85,6 +87,10 @@ def create_plate_df():
 
     return df
 
+# Try to fix the issue of different lower/upper case col header
+def manage_columns_typo(df):
+    return df.columns.str.strip().str.lower()
+
 def create_table_df():
     index = [f"{chr(col)}{row}" for row in range(1, 13) for col in range(ord('A'), ord('H') + 1)]
 
@@ -92,8 +98,7 @@ def create_table_df():
     df[SOURCE_NAME_COL] = '' 
     return df
 
-def color_header(ws, color):
-
+def color_header(ws, color=None):
     for cell in ws[1]:  
         cell.fill = PatternFill(start_color="ADD8E6", end_color="ADD8E6", fill_type='solid')
 
@@ -166,8 +171,7 @@ def fetch_and_concatenate(df, data_folder):
 
      
             # Ensure that columns are properly formatted (strip whitespace, lowercase)
-            df_star.columns = df_star.columns.str.strip().str.lower()
-            df.columns = df.columns.str.strip().str.lower()
+            df_star.columns = manage_columns_typo(df_star)
 
             # We need to replace '.' by '-' in the file to have matchs with Star files codes
             # The star files have codes with '-'
@@ -175,7 +179,7 @@ def fetch_and_concatenate(df, data_folder):
             
             # Add the Star run
             df_star[STAR_RUN_COL] = run_name
-             
+
             if SOURCE_BARCODE_COL in df_star.columns and SAMPLES_CODES_COL in df.columns:
                 for i, sample_code in enumerate(df[SAMPLES_CODES_COL]):
                     matched_rows = df_star[df_star[SOURCE_BARCODE_COL] == sample_code]
@@ -193,14 +197,12 @@ def create_tables(data_folder, df_sorted, output_file):
     tables_by_run = {}  # Create tables to input Myra
     
     with pd.ExcelWriter(output_file,  engine='openpyxl', mode='a') as writer:
-        source_barcode = 'Source Barcode'   # with uppercases (!= in the first file - lowercase)
-
         files = sort_files(data_folder)
 
         for file_name in files:
             cells = []
 
-            if file_name.startswith('Star_0'):
+            if file_name.startswith('Star_0') or file_name.startswith('star_0'):
                 file_name = fetch_filename(data_folder, file_name)
                 run_name = file_name.split('_')[1] 
                 
@@ -214,13 +216,14 @@ def create_tables(data_folder, df_sorted, output_file):
                 ext = return_extention(file_name)
 
                 df = read_table_file(file_name, ext)
-                df = replace_hyphen_by_dot(df, source_barcode)
+                df.columns = manage_columns_typo(df)
+
+                df = replace_hyphen_by_dot(df, SOURCE_BARCODE_COL)
                 df = df.dropna()        # remove nan
 
                 for _, row in df.iterrows():
-
-                    target_position = str(row['Target Position'])
-                    sample_code = row[source_barcode]
+                    target_position = str(row[TARGET_POSITION_COL])
+                    sample_code = row[SOURCE_BARCODE_COL]
                     
                     if target_position:
                         plate_row = target_position[0]
@@ -243,13 +246,16 @@ def create_tables(data_folder, df_sorted, output_file):
                 # Create another table for Myra input
                 tables_by_run[run_name] = df_table
 
+    # We want a tables sheet containing all tables for Myra input
+    # The Myra need position (A1, B1...), and the sample next to each position
+    # If we dont have sample for a position, the cell will be empty
     with pd.ExcelWriter(output_file,  engine='openpyxl', mode='a') as writer:
         create_new_tables_sheet(writer, tables_by_run, 'tables')
 
 
 
-SERIAL_NUMBER         = 'Serial number'
-SAMPLES_CODES_COL     = "Samples codes"
+SERIAL_NUMBER         = 'serial number'
+SAMPLES_CODES_COL     = "samples codes"
 PRODUCTION_DATE_COL   = "production date"
 SOURCE_BARCODE_COL    = "source barcode" 
 TARGET_POSITION_COL   = "target position"
@@ -274,10 +280,11 @@ else:
     exit('Cannot find your sending file')
 
 df = pd.read_excel(sending_file, header=None)
-
+# Reaching the table because it doesn't start from the first file row
 header_row = None
 for i, row in df.iterrows():
-    if SERIAL_NUMBER in row.values:
+    row_str = row.astype(str).str.strip().str.lower()   # fix upper/lower case issue
+    if SERIAL_NUMBER in row_str.values:
         header_row = i
         break
 
