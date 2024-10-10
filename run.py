@@ -22,6 +22,7 @@ def create_dir(d):
             logging.info(f"[create_dir] Successfully created directory: {results_dir}\n")
         except Exception as e:
             logging.error(f"[create_dir] Error occurred while creating directory {d}: {e}\n")
+            exit()
 
 def return_extention(f):
     _, file_extension = os.path.splitext(f)
@@ -301,7 +302,7 @@ concatened_file = 'concatenated_result.xlsx'
 # [1 ]- Fetch 'Samples codes' and 'Production date' columns
 try:
     for i in os.listdir(data_dir):
-        if i.startswith('WGS') or i.startswith('wgs'):
+        if 'WGS' in i or'wgs' in i:
             sending_file = os.path.join(data_dir, i)
             break
     else:
@@ -316,6 +317,7 @@ except Exception as e:
 
 try:
     df = pd.read_excel(sending_file, header=None)
+    
     # Reaching the table because it doesn't start from the first file row
     header_row = None
     for i, row in df.iterrows():
@@ -326,7 +328,16 @@ try:
 
     if header_row is not None:
         df = pd.read_excel(sending_file, header=header_row)
+        df.columns = manage_columns_typo(df)
+
+        null_rows = df[df[SAMPLES_CODES_COL].isna() | df[PRODUCTION_DATE_COL].isna()]
         
+        if len(null_rows) > 0:
+            msg = f'[1.2] Your data has null values:\n {null_rows}\n'
+            logging.error(msg)
+            exit(msg)
+
+
         columns = fetch_columns(df, [SAMPLES_CODES_COL, PRODUCTION_DATE_COL])
 
         df_filtered = df[columns]
@@ -334,14 +345,14 @@ try:
         logging.info(f"[1.2] Successfully fetching header form'sending' file\n")
 
     else:
-        logging.error(f"[1.2] Error occurred while fetching header form'sending' file: {e}\n")
+        logging.error(f"[1.2] Error occurred while fetching header form 'sending' file: {e}\n")
 
         exit("Could not find the table header.")
 
 except Exception as e:
     logging.error(f"[1.2] Error occurred while fetching header form'sending' file: {e}\n")
 
-# [2] - Concate Star_0XX files
+# [2] - Concate Star_0XX files with the sending file
 directory = 'data'  
 try:
     df_results = fetch_and_concatenate(df_filtered, directory)
@@ -351,12 +362,13 @@ except Exception as e:
     logging.error(msg)
     exit(msg)
 
-has_nan = df_results.isna().any().any()
+df_results.columns = manage_columns_typo(df_results)
+null_rows = df_results[df_results[SOURCE_BARCODE_COL].isna() | 
+               df_results[TARGET_POSITION_COL].isna() |
+               df_results[STAR_RUN_COL].isna()]
 
-if has_nan:
-    rows_with_nan = df_results[df_results.isna().any(axis=1)]
-    
-    msg = f'[2.2] Your data has Null values: {rows_with_nan}\n'
+if len(null_rows) > 0:    
+    msg = f'[2.2] Your data has null values: {null_rows}\n'
     logging.error(msg)
     exit(msg)
 
@@ -391,4 +403,3 @@ try:
     print(msg)
 except Exception as e:
     logging.error(f"[2.5] Error occurred while creating tables sheets: {e}")
-
