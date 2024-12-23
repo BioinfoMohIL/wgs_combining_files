@@ -5,6 +5,7 @@ import logging
 import warnings
 import numpy as np
 import pandas as pd
+from openpyxl import Workbook, load_workbook
 from openpyxl.styles import PatternFill
 
 '''
@@ -12,8 +13,10 @@ Combine the sending file (WGS_XXXX) with 'star' files :
     according to the sample code in sending file, fetch the samples in the 'star' files
     (these samples need to be run first)
 '''
-
 warnings.filterwarnings("ignore", category=UserWarning, module='openpyxl')
+
+
+RUN_FILE_PATTERN =  'star_0'
 
 def create_dir(d):
     if not os.path.exists(d):
@@ -24,6 +27,14 @@ def create_dir(d):
             logging.error(f"[create_dir] Error occurred while creating directory {d}: {e}\n")
             exit()
 
+def convert_csv_to_xl(data_dir, file):
+    csv_file = os.path.join(data_dir, file)
+    df = pd.read_csv(csv_file)  
+    excel_file = os.path.join(data_dir, file.replace('.csv', '.xlsx'))
+        
+    df.to_excel(excel_file, index=False)
+    
+            
 def return_extention(f):
     _, file_extension = os.path.splitext(f)
     return file_extension
@@ -89,11 +100,10 @@ def sort_files(d):
             file_data.append((numeric_part, file))  
 
     file_data.sort(key=lambda x: x[0])  
-
     return [file for _, file in file_data]
 
 def sort_df(df, col_name):
-    df['numeric_part'] = df[col_name].str.extract('(\d+)').astype(int)
+    df['numeric_part'] = df[col_name].str.extract(r'(\d+)').astype(int)
     return df.sort_values(by='numeric_part', ascending=True).drop(columns='numeric_part')
 
 def create_plate_df():
@@ -146,7 +156,7 @@ def create_new_tables_sheet(writer, tables, sheet_name):
         for index, row in df.iterrows():
             rows.append(['', index, row.values[0]])
              
-         
+        
         rows.append(['','',''])
             
     result_df = pd.DataFrame(rows, columns=[None, None, None]) 
@@ -169,103 +179,218 @@ def highlighting_cells(ws, cells):
             if cell.value in cells: 
                 cell.fill = yellow_fill        
 
-def fetch_and_concatenate(df, data_folder):
-    df_result = df.copy()
+def fetch_and_concatenate(df, data_dir, data):
+    file_path = os.path.join(data_dir, data)
+    file_name = os.path.basename(file_path)
+    run_name = file_name.split('_')[1] 
 
-    for file_name in os.listdir(data_folder):
-        if file_name.startswith('Star_0'):
-            file_path = os.path.join(data_folder, file_name)
-            file_name = os.path.basename(file_path)
-            run_name = file_name.split('_')[1] 
-            # run_name = '_'.join(run_name_parts)
+    ext = return_extention(file_path)
 
-            ext = return_extention(file_path)
+    df_star = read_table_file(file_path, ext)
 
-            df_star = read_table_file(file_path, ext)
+    # Ensure that columns are properly formatted (strip whitespace, lowercase)
+    df_star.columns = manage_columns_typo(df_star)
 
-     
-            # Ensure that columns are properly formatted (strip whitespace, lowercase)
-            df_star.columns = manage_columns_typo(df_star)
-
-            # We need to replace '.' by '-' in the file to have matchs with Star files codes
-            # The star files have codes with '-'
-            df_star = replace_hyphen_by_dot(df_star, SOURCE_BARCODE_COL)
-            
-            # Add the Star run
-            df_star[STAR_RUN_COL] = run_name
-
-            if SOURCE_BARCODE_COL in df_star.columns and SAMPLES_CODES_COL in df.columns:
-                for i, sample_code in enumerate(df[SAMPLES_CODES_COL]):
-                    matched_rows = df_star[df_star[SOURCE_BARCODE_COL] == sample_code]
-                    
-                    # If there's a match, append the row to the corresponding row in df_result
-                    if not matched_rows.empty:
-                        for column in matched_rows.columns:
-                            # Add the matched row to df_result (or merge the columns if already exists)
-                            df_result.loc[i, column] = matched_rows.iloc[0][column]
+    # We need to replace '.' by '-' in the file to have matchs with Star files codes
+    # The star files have codes with '-'
+    df_star = replace_hyphen_by_dot(df_star, SOURCE_BARCODE_COL)
     
-        
-    return df_result[[SAMPLES_CODES_COL, SOURCE_BARCODE_COL, TARGET_POSITION_COL, STAR_RUN_COL]]
+    # Add the Star run
+    df_star[STAR_RUN_COL] = run_name
+
+    if SOURCE_BARCODE_COL in df_star.columns and SAMPLES_CODES_COL in df.columns:
+        for i, sample_code in enumerate(df[SAMPLES_CODES_COL]):
+            matched_rows = df_star[df_star[SOURCE_BARCODE_COL] == sample_code]
+            
+            # If there's a match, append the row to the corresponding row in df_result
+            if not matched_rows.empty:
+                for column in matched_rows.columns:
+                    # Add the matched row to df_result (or merge the columns if already exists)
+                    df.loc[i, column] = matched_rows.iloc[0][column]
+     
+    return df[[SAMPLES_CODES_COL, SOURCE_BARCODE_COL, TARGET_POSITION_COL, STAR_RUN_COL]]
 
 def create_tables(data_folder, df_sorted, output_file):
-    tables_by_run = {}  # Create tables to input Myra
+    tables_by_run = {}              # tables to input Myra
+    tables_by_run_cleaned = {}      # tables clean to Myra view 96w
     
     with pd.ExcelWriter(output_file,  engine='openpyxl', mode='a') as writer:
         files = sort_files(data_folder)
-
         for file_name in files:
             cells = []
+            
+            run_name = file_name.split('_')[1] 
+            
+            # Create df like 96w plate A -> H (rows), 1 -> 12 (cols)
+            df_plate = create_plate_df() 
+            df_table = create_table_df() 
+            
+            file_name = os.path.join(data_folder, file_name)
+            
+            ext = return_extention(file_name)
 
-            if file_name.startswith('Star_0') or file_name.startswith('star_0'):
-                file_name = fetch_filename(data_folder, file_name)
-                run_name = file_name.split('_')[1] 
+            df = read_table_file(file_name, ext)
+            df.columns = manage_columns_typo(df)
+
+            df = replace_hyphen_by_dot(df, SOURCE_BARCODE_COL)
+            df = df.dropna()   
+
+            for _, row in df.iterrows():
+                target_position = str(row[TARGET_POSITION_COL])
+                sample_code = row[SOURCE_BARCODE_COL]
                 
-                # Create df like 96w plate A -> H (rows), 1 -> 12 (cols)
-                df_plate = create_plate_df() 
-                df_table = create_table_df() 
-                
-               
-                file_name = os.path.join(data_folder, file_name)
-                
-                ext = return_extention(file_name)
-
-                df = read_table_file(file_name, ext)
-                df.columns = manage_columns_typo(df)
-
-                df = replace_hyphen_by_dot(df, SOURCE_BARCODE_COL)
-                df = df.dropna()        # remove nan
-
-                for _, row in df.iterrows():
-                    target_position = str(row[TARGET_POSITION_COL])
-                    sample_code = row[SOURCE_BARCODE_COL]
+                if target_position:
+                    plate_row = target_position[0]
+                    plate_col = target_position[1:]
                     
-                    if target_position:
-                        plate_row = target_position[0]
-                        plate_col = target_position[1:]
-                        
-                        df_plate.loc[plate_row, plate_col] = sample_code
+                    df_plate.loc[plate_row, plate_col] = sample_code
+
+            cells, positions = cells_to_highlight(df_sorted, run_name)
+            
+            df_plate.to_excel(writer, sheet_name=run_name)
+            
+            populate_table(positions, df_table, SOURCE_NAME_COL)
+
+            # Color cells
+            ws = writer.sheets[run_name]
+            color_header(ws,'ADD8E6')
+            highlighting_cells(ws, cells)
+
+            # Create another tables for Myra input
+            tables_by_run[run_name] = df_table
+            tables_by_run_cleaned[run_name] = cleaning_run_empties(df_table, SOURCE_NAME_COL)
+    
+    create_tables_myra_input(tables_by_run, output_file)
+    create_cleaned_tables_myra(tables_by_run_cleaned, output_file)
+           
+######################################################
+##### MYRA ###########################################
+# 1. 'tables' sheet
+# We want a tables sheet containing all tables for Myra input
+# The Myra need position (A1, B1...), and the sample next to each position
+# If we dont have sample for a position, the cell will be empty
+def create_tables_myra_input(tables, outp):    
+    try:
+        with pd.ExcelWriter(outp,  engine='openpyxl', mode='a') as writer:
+            create_new_tables_sheet(writer, tables, 'tables')
+    except Exception as e:
+        print(f'[Myra input tables] : Failed to create table for {f}/n{e}')
+
+# 2. 'myra' sheet
+# We want to create a 96w based on Myra input.
+# For each run ('star' files), remove the empties
+def cleaning_run_empties(df, column_name):
+    return df.replace('', None).dropna()[column_name].tolist()
+
+# We want to create plates of 96w based on Myra input filled vertically.
+#   -> Iterate through the runs and fill the plates. When we reach a plate end (H12)
+#       we create a new one below the previous one etc..
+pastel_colors = [
+    "FAD02E", "F28D35", "D83367", "9A4F96", "2D3D6B", "3B96B1", "4CBF6F", "F5C6B8", 
+    "D9D8D1", "F1A7B5", "E9A6A6", "F2B0A1", "D4E6F1", "E2D1F9", "E7D0B0", "C6E2A2", 
+    "FFE156", "C9FF71", "E3F9DC", "B2D7E4"
+]
+
+def set_header_and_index(ws, start_row=0, end_row=10):
+    for col in range(1, 13):  # Column headers 1-12
+        ws.cell(row=start_row, column=col + 1, value=str(col))  
+
+    idx = 0
+    for row in range(start_row, end_row):  # Rows A-H (Index rows)
+        ws.cell(row=row+1, column=1, value=chr(ord('A') + idx)) 
+
+        idx = (idx + 1) if idx <= 6 else 0
+
+def create_empty_table(ws, start_row=2, end_row=10):
+    
+    set_header_and_index(ws, start_row, end_row)
+    
+    blue_fill = PatternFill(start_color="87CEEB", fill_type="solid")
+    for col in range(2, 14):  # Style header row (1-12)
+        ws.cell(row=start_row, column=col).fill = blue_fill
+
+    for row in range(start_row, end_row+1):  # Style index column (A-H)
+        ws.cell(row=row, column=1).fill = blue_fill
+
+def fill_cell(ws, row, col, val, color=None):
+    if color:
+        ws.cell(row=row, column=col, value=val).fill = color
+    else:
+        ws.cell(row=row, column=col, value=val)
+
+def fill_well_plates(inp, wb):
+    start_row = 3   # One row for the plate number, one for the header and we start from 3 
+    current_row, current_col = start_row, 1 
+    plate_number = 1
+
+    ws = wb.create_sheet(title="Myra")  
+    
+    fill_cell(ws=ws, row=1, col=current_col, val=f"Plate {plate_number}")
+    
+    create_empty_table(ws)
+    
+    count = 0       # keep track of the row iteration
+    keys = list(inp.keys()) 
+    for idx, (key, values) in enumerate(inp.items()):
+        color = PatternFill(start_color=pastel_colors[idx], fill_type="solid")  
+
+        for value in values:
+
+            fill_cell(
+                ws=ws, 
+                row=current_row, 
+                col=current_col + 1, 
+                val=value,
+                color=color)
+            
+            current_row += 1
+            count += 1 
+
+            if count == 8:  # If end of rows (A-H) is reached
+                current_col += 1
+                count = 0
+
+                # If end of columns (1-12) is reached, create a new plate below with a space
+                # and ensure to create a new table if the object is ended 
+                if (current_col > 12) and (idx + 1 < len(keys)):
+                    current_col = 1     # Start filling from the first column again
+                    current_row += 1    # Add space for a new plate (space between tables)
+                    plate_number += 1   # Increment plate number
+                    
+                    fill_cell(
+                        ws=ws, 
+                        row=current_row, 
+                        col=current_col, 
+                        val=f"Plate {plate_number}")
+                    
+                    current_row += 1    # Create the table below the plate number
+                       
+                    create_empty_table(
+                        ws=ws, 
+                        start_row=current_row, 
+                        end_row=current_row + 8)
+                    
+                    current_row += 1    # Starting to fill the table below the header
+
+                    continue    # Go to the next iteration directly and don't reset 
+                                # the current row (to continue below the filled table another one)
+
+                current_row = current_row - 8  # 'reset' the current row to fill anther column
+
+def create_cleaned_tables_myra(inp, filename):
+    try:
+        wb = load_workbook(filename)
+        # Remove the default sheet created automatically by Workbook() and create a new one
+        wb.remove(wb.active)
+        fill_well_plates(inp, wb)
+        wb.save(filename)
+    except Exception as e:
+        logging.error(f"[create_cleaned_tables_myra] Error occurred while creating the sheet: \n{e}")
 
 
-                cells, positions = cells_to_highlight(df_sorted, run_name)
-                
-                df_plate.to_excel(writer, sheet_name=run_name)
-               
-                populate_table(positions, df_table, SOURCE_NAME_COL)
 
-                # Color cells
-                ws = writer.sheets[run_name]
-                color_header(ws,'ADD8E6')
-                highlighting_cells(ws, cells)
 
-                # Create another table for Myra input
-                tables_by_run[run_name] = df_table
-
-    # We want a tables sheet containing all tables for Myra input
-    # The Myra need position (A1, B1...), and the sample next to each position
-    # If we dont have sample for a position, the cell will be empty
-    with pd.ExcelWriter(output_file,  engine='openpyxl', mode='a') as writer:
-        create_new_tables_sheet(writer, tables_by_run, 'tables')
-
+##############################################################    
 
 SERIAL_NUMBER_COL     = 'serial number'
 SAMPLES_CODES_COL     = "samples codes"
@@ -293,13 +418,35 @@ logging.basicConfig(filename=log_file, level=logging.DEBUG,
 
 data_dir        = os.path.join(wd, 'data')
 results_file    = os.path.join(results_dir, f'results_{formatted_date}.xlsx')
-filtered_file   = 'filtered_result.xlsx'
-concatened_file = 'concatenated_result.xlsx'
+filtered_file   = 'filtered_result'
+concatened_file = 'concatenated_result'
+runs_files = [filename for filename in os.listdir(data_dir) 
+        if filename.lower().startswith(RUN_FILE_PATTERN) and filename.lower().endswith('.xlsx')]
+
 
 
 ################################################################
 
-# [1 ]- Fetch 'Samples codes' and 'Production date' columns
+### [0] - Setup ###
+
+
+# If .csv, convert to xl (and remove csv files after convertion)
+# We prefer to work with xl files
+csv_files = [file for file in runs_files if file.endswith(".csv")]
+if csv_files:
+    for f in csv_files:
+        try:
+            convert_csv_to_xl(data_dir, f)
+            os.remove(os.path.join(data_dir, f))
+            logging.info(f"[1.3] Successfully converted {f} to excel.\n")
+        except Exception as e:
+            msg = f"[2.1] Error occurred while converting {f} to excel: {e}\n"
+            logging.error(msg)
+            exit(msg)
+
+#################################################################
+### [1]- Fetch 'Samples codes' and 'Production date' columns ###
+
 try:
     for i in os.listdir(data_dir):
         if 'WGS' in i or'wgs' in i:
@@ -313,7 +460,6 @@ try:
     logging.info(f"[1.1] Successfully fetched 'sending' file\n")
 except Exception as e:
     logging.error(f"[1.1] Error occurred while fetching 'sending' file: {e}\n")
-
 
 try:
     df = pd.read_excel(sending_file, header=None)
@@ -352,15 +498,21 @@ try:
 except Exception as e:
     logging.error(f"[1.2] Error occurred while fetching header form'sending' file: {e}\n")
 
-# [2] - Concate Star_0XX files with the sending file
-directory = 'data'  
+
+###########################################################
+### [2] - Concate Star_0XX files with the sending file ###
+
+df_results = df_filtered.copy()
 try:
-    df_results = fetch_and_concatenate(df_filtered, directory)
+    for r in runs_files:
+        df_results = fetch_and_concatenate(df_results, data_dir, r)
+
     logging.info(f"[2.1] Successfully fetching & concate 'star' files.\n")
 except Exception as e:
     msg = f"[2.1] Error occurred while fetching & concate 'star' files: {e}\n"
     logging.error(msg)
     exit(msg)
+
 
 df_results.columns = manage_columns_typo(df_results)
 null_rows = df_results[df_results[SOURCE_BARCODE_COL].isna() | 
@@ -392,14 +544,16 @@ except Exception as e:
     logging.error(msg)
     exit(msg)
 
-# [3] - Create Tables
+##############################################################
+### [3] - Create Tables 96w like, and highlighted ###
 # create like 96w table A1, B1, C1 ....
-# color the eva's samples
+# color the user's samples
 try:
-    create_tables(directory, df_sorted, results_file)
+    create_tables(data_dir, df_sorted, results_file)
     logging.info('[2.5] Successfully created tables sheets (plates, long table)\n')
     msg = 'The script ran successfully\n\n--- THE END ---'
     logging.info(msg)
     print(msg)
 except Exception as e:
     logging.error(f"[2.5] Error occurred while creating tables sheets: {e}")
+
