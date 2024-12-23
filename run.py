@@ -149,16 +149,14 @@ def populate_table(d, table, col):
         table.loc[key, col] = value
 
 def create_new_tables_sheet(writer, tables, sheet_name):
+
     rows = []
     for key, df in tables.items():
         rows.append([key,'',''])
         rows.append(['','',SOURCE_NAME_COL])
         for index, row in df.iterrows():
             rows.append(['', index, row.values[0]])
-             
-        
         rows.append(['','',''])
-            
     result_df = pd.DataFrame(rows, columns=[None, None, None]) 
     result_df.to_excel(writer, sheet_name=sheet_name, index=False)
             
@@ -212,8 +210,9 @@ def fetch_and_concatenate(df, data_dir, data):
 
 def create_tables(data_folder, df_sorted, output_file):
     tables_by_run = {}              # tables to input Myra
-    tables_by_run_cleaned = {}      # tables clean to Myra view 96w
-    
+    tables_by_run_cleaned = {}      # tables with dropna
+    tables_cleaned_for_plates = {}  # tables cleaned to Myra plates view (96w)
+
     with pd.ExcelWriter(output_file,  engine='openpyxl', mode='a') as writer:
         files = sort_files(data_folder)
         for file_name in files:
@@ -258,10 +257,15 @@ def create_tables(data_folder, df_sorted, output_file):
 
             # Create another tables for Myra input
             tables_by_run[run_name] = df_table
-            tables_by_run_cleaned[run_name] = cleaning_run_empties(df_table, SOURCE_NAME_COL)
+            tables_by_run_cleaned[run_name] = df_table.replace([None, ''], pd.NA).dropna()
+
+            tables_cleaned_for_plates[run_name] = cleaning_run_empties(df_table, SOURCE_NAME_COL)
     
-    create_tables_myra_input(tables_by_run, output_file)
-    create_cleaned_tables_myra(tables_by_run_cleaned, output_file)
+    create_tables_myra_input(tables_by_run, output_file, 'tables')
+
+    create_tables_myra_input(tables_by_run_cleaned, output_file, 'tables_cleaned')
+
+    create_plates_myra(tables_cleaned_for_plates, output_file)
            
 ######################################################
 ##### MYRA ###########################################
@@ -269,10 +273,10 @@ def create_tables(data_folder, df_sorted, output_file):
 # We want a tables sheet containing all tables for Myra input
 # The Myra need position (A1, B1...), and the sample next to each position
 # If we dont have sample for a position, the cell will be empty
-def create_tables_myra_input(tables, outp):    
+def create_tables_myra_input(tables, outp, sheetname):    
     try:
         with pd.ExcelWriter(outp,  engine='openpyxl', mode='a') as writer:
-            create_new_tables_sheet(writer, tables, 'tables')
+            create_new_tables_sheet(writer, tables, sheetname)
     except Exception as e:
         print(f'[Myra input tables] : Failed to create table for {f}/n{e}')
 
@@ -330,7 +334,7 @@ def fill_well_plates(inp, wb):
     create_empty_table(ws)
     
     count = 0       # keep track of the row iteration
-    keys = list(inp.keys()) 
+    inp_items = list(inp.items())
     for idx, (key, values) in enumerate(inp.items()):
         color = PatternFill(start_color=pastel_colors[idx], fill_type="solid")  
 
@@ -350,9 +354,8 @@ def fill_well_plates(inp, wb):
                 current_col += 1
                 count = 0
 
-                # If end of columns (1-12) is reached, create a new plate below with a space
-                # and ensure to create a new table if the object is ended 
-                if (current_col > 12) and (idx + 1 < len(keys)):
+             
+                if (current_col > 12) and (idx + 1 < len(inp_items)):
                     current_col = 1     # Start filling from the first column again
                     current_row += 1    # Add space for a new plate (space between tables)
                     plate_number += 1   # Increment plate number
@@ -377,15 +380,14 @@ def fill_well_plates(inp, wb):
 
                 current_row = current_row - 8  # 'reset' the current row to fill anther column
 
-def create_cleaned_tables_myra(inp, filename):
+   
+def create_plates_myra(inp, filename):
     try:
         wb = load_workbook(filename)
-        # Remove the default sheet created automatically by Workbook() and create a new one
-        wb.remove(wb.active)
         fill_well_plates(inp, wb)
         wb.save(filename)
     except Exception as e:
-        logging.error(f"[create_cleaned_tables_myra] Error occurred while creating the sheet: \n{e}")
+        logging.error(f"[create_plates_myra] Error occurred while creating the sheet: \n{e}")
 
 
 
