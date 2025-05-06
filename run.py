@@ -15,7 +15,7 @@ Combine the sending file (WGS_XXXX) with 'star' files :
     [1] Fetch 'Samples codes' and 'Production date' columns.
     	Check Sample Quality -if the samples did not pass the threshold:
 		-> 'Conc. Dilution Factor' <= 1 or
-		-> '260/280' < 1.7 or '260/280' > 2
+		-> '260/280' < 1.7 or '260/280' > 2.2
     [2] Concate Run files (Star_0XX) with the sending file (WGS_XXX):
         	->  The 'Samples codes' of the sending files has to be = to
             	the 'Source Barcode' of the run file
@@ -193,41 +193,25 @@ def populate_table(d, table, col):
 
 def create_new_tables_sheet(writer, tables, sheet_name):
 
- 
-
     rows = []
-
     for key, df in tables.items():
-
         rows.append([key,'',''])
-
         rows.append(['','',SOURCE_NAME_COL])
 
         for index, row in df.iterrows():
-
             rows.append(['', index, row.values[0]])
-
         rows.append(['','',''])
 
     result_df = pd.DataFrame(rows, columns=[None, None, None])
-
     result_df.to_excel(writer, sheet_name=sheet_name, index=False)
 
 def get_position(df, star_run):
-
     cells_positions = []
-
-   
 
     current_df = df[df[STAR_RUN_COL] == star_run]
 
- 
-
     for _, row in current_df.iterrows():
-
         cells_positions.append(row[TARGET_POSITION_COL])
-
- 
 
     return cells_positions
 
@@ -280,7 +264,6 @@ def create_tables(data_folder, df_sorted, output_file, bad_quality_samples=None)
 
 
     with pd.ExcelWriter(output_file,  engine='openpyxl', mode='a') as writer:
-
         files = sort_files(data_folder)
         for file_name in files:
             cells = []
@@ -288,7 +271,6 @@ def create_tables(data_folder, df_sorted, output_file, bad_quality_samples=None)
             run_name = file_name.split('_')[1]
 
             # Create df like 96w plate A -> H (rows), 1 -> 12 (cols)
-
             df_plate = create_plate_df()
             df_table = create_table_df()
 
@@ -296,51 +278,28 @@ def create_tables(data_folder, df_sorted, output_file, bad_quality_samples=None)
 
             ext = return_extention(file_name)
 
- 
-
             df = read_table_file(file_name, ext)
-
             df.columns = manage_columns_typo(df)
 
- 
 
             df = replace_hyphen_by_dot(df, SOURCE_BARCODE_COL)
-
             df = df.dropna()  
 
- 
-
             for _, row in df.iterrows():
-
                 target_position = str(row[TARGET_POSITION_COL])
-
                 sample_code = row[SOURCE_BARCODE_COL]
-
-               
-
+		    
                 if target_position:
-
                     plate_row = target_position[0]
-
                     plate_col = target_position[1:]
-
-                   
 
                     df_plate.loc[plate_row, plate_col] = sample_code
 
- 
-
             cells, positions = cells_to_highlight(df_sorted, run_name)
-
-           
 
             df_plate.to_excel(writer, sheet_name=run_name)
 
-           
-
             populate_table(positions, df_table, SOURCE_NAME_COL)
-
- 
 
             # Color cells
             ws = writer.sheets[run_name]
@@ -368,15 +327,11 @@ def create_tables(data_folder, df_sorted, output_file, bad_quality_samples=None)
 # If we dont have sample for a position, the cell will be empty
 
 def create_tables_myra_input(tables, outp, sheetname):    
-
     try:
-
         with pd.ExcelWriter(outp,  engine='openpyxl', mode='a') as writer:
-
             create_new_tables_sheet(writer, tables, sheetname)
 
     except Exception as e:
-
         print(f'[Myra input tables] : Failed to create table for {f}/n{e}')
 
 # 2. 'myra' sheet
@@ -392,11 +347,9 @@ def cleaning_run_empties(df, column_name):
 #       we create a new one below the previous one etc..
 
 pastel_colors = [
-
     "FAD02E", "F28D35", "D83367", "9A4F96", "2D3D6B", "3B96B1", "4CBF6F", "F5C6B8",
     "D9D8D1", "F1A7B5", "E9A6A6", "F2B0A1", "D4E6F1", "E2D1F9", "E7D0B0", "C6E2A2",
     "FFE156", "C9FF71", "E3F9DC", "B2D7E4"
-
 ]
 
 def set_header_and_index(ws, start_row=0, end_row=10):
@@ -423,25 +376,17 @@ def create_empty_table(ws, start_row=2, end_row=10):
         ws.cell(row=row, column=1).fill = blue_fill
 
 def fill_cell(ws, row, col, val, color=None):
-
     if color:
-
         ws.cell(row=row, column=col, value=val).fill = color
-
     else:
-
         ws.cell(row=row, column=col, value=val)
 
 def fill_well_plates(inp, wb):
-
     start_row = 3   # One row for the plate number, one for the header and we start from 3
-
     current_row, current_col = start_row, 1
-
     plate_number = 1
 
     ws = wb.create_sheet(title="Myra")  
-
     fill_cell(ws=ws, row=1, col=current_col, val=f"Plate {plate_number}")
 
     create_empty_table(ws)
@@ -449,9 +394,7 @@ def fill_well_plates(inp, wb):
     count = 0       # keep track of the row iteration
     for idx, (key, values) in enumerate(inp.items()):
         color = PatternFill(start_color=pastel_colors[idx], fill_type="solid")  
-
         for value in values:
-
             fill_cell(
                 ws=ws,
                 row=current_row,
@@ -659,7 +602,7 @@ except Exception as e:
 ### [1.3]- Detect sample metrics                              ###
 # Check files containinf 'Elab' or 'elab', and determin if the samples did not pass the threshold
 #   -> 'Conc. Dilution Factor' <= 1 or
-#   -> '260/280' < 1.7 or '260/280' > 2
+#   -> '260/280' < 1.7 or '260/280' > 2.2
 
 combined_df = load_elab_data(data_dir, df_filtered)
 
@@ -670,7 +613,7 @@ combined_df['260/280'] = pd.to_numeric(combined_df['260/280'], errors='coerce')
 # Apply the filtering
 filtered_df = combined_df[
     (combined_df['Conc. Dilution Factor'] <= 1) |
-    ((combined_df['260/280'] < 1.7) | (combined_df['260/280'] > 2))
+    ((combined_df['260/280'] < 1.7) | (combined_df['260/280'] > 2.2))
 ]
 
 bad_quality_samples = filtered_df['Sample'].dropna().astype(str).tolist()
