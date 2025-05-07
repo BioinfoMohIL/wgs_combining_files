@@ -602,7 +602,7 @@ except Exception as e:
 ### [1.3]- Detect sample metrics                              ###
 # Check files containinf 'Elab' or 'elab', and determin if the samples did not pass the threshold
 #   -> 'Conc. Dilution Factor' <= 1 or
-#   -> '260/280' < 1.7 or '260/280' > 2.2
+#   -> '260/280' <= 1.8 or '260/280' > 2.2
 
 combined_df = load_elab_data(data_dir, df_filtered)
 
@@ -612,8 +612,8 @@ combined_df['260/280'] = pd.to_numeric(combined_df['260/280'], errors='coerce')
 
 # Apply the filtering
 filtered_df = combined_df[
-    (combined_df['Conc. Dilution Factor'] <= 1) |
-    ((combined_df['260/280'] < 1.7) | (combined_df['260/280'] > 2.2))
+    (combined_df['Conc. Dilution Factor'] <= 0.95) |
+    ((combined_df['260/280'] <= 1.8) | (combined_df['260/280'] > 2.2))
 ]
 
 bad_quality_samples = filtered_df['Sample'].dropna().astype(str).tolist()
