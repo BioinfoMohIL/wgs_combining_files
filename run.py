@@ -13,12 +13,13 @@ Combine the sending file (WGS_XXXX) with 'star' files :
     [0] Setup:
         -> If .csv, convert to xl (we prefer to work with xl files).
     [1] Fetch 'Samples codes' and 'Production date' columns.
-    	Check Sample Quality -if the samples did not pass the threshold:
-		-> 'Conc. Dilution Factor' <= 1 or
-		-> '260/280' < 1.7 or '260/280' > 2.2
-    [2] Concate Run files (Star_0XX) with the sending file (WGS_XXX):
-        	->  The 'Samples codes' of the sending files has to be = to
-            	the 'Source Barcode' of the run file
+        Check Sample Quality Control ; if the samples passed the threshold
+            -> 'Conc. Dilution Factor' <= 0.95 or
+            -> '260/280' <= 1.8 or 2.3 >='260/280'
+
+    [2] Concate Run files (Star_0XX) with the sending file (WGS_XXX)
+        ->  The 'Samples codes' of the sending files has to be = to
+            the 'Source Barcode' of the run file
     [3] Create Tables 96w like, and highlight to sample we need to run from each
         table (in target position)
     [4] Create inputs for running easily Myra program
@@ -27,6 +28,7 @@ Combine the sending file (WGS_XXXX) with 'star' files :
 warnings.filterwarnings("ignore", category=UserWarning, module='openpyxl')
 
 RUN_FILE_PATTERN =  'star'
+ELAB_FILE_PATTERN =  'elab'
 
 def create_dir(d):
     if not os.path.exists(d):
@@ -42,7 +44,6 @@ def create_dir(d):
             logging.error(f"[create_dir] Error occurred while creating directory {d}: {e}\n")
 
             exit()
-
 
 def convert_csv_to_xl(data_dir, file):
     csv_file = os.path.join(data_dir, file)
@@ -70,19 +71,24 @@ def read_table_file(file_name, ext):
 
     return df
 
-def get_run_files(pattern, extension):
+def get_files_start_with_pattern(pattern, extension, data_dir):
     return [
     filename for filename in os.listdir(data_dir)
-    if filename.lower().startswith(RUN_FILE_PATTERN) and filename.lower().endswith(extension)
+    if filename.lower().startswith(pattern) and filename.lower().endswith(extension)
     ]
- 
+
+def get_files_contains_pattern(pattern, extension, data_dir):
+    return [
+    filename for filename in os.listdir(data_dir)
+    if pattern in filename.lower() and filename.lower().endswith(extension)
+    ]
+
 def fetch_filename(data_folder, file_name):
     file_path = os.path.join(data_folder, file_name)
     file_name = os.path.basename(file_path)
 
     return file_name
 
- 
 def fetch_columns(df, required_columns):
 
     """
@@ -116,7 +122,6 @@ def fetch_columns(df, required_columns):
 
     return available_columns
 
-
 def replace_hyphen_by_dot(df, col_name):
     pd.Series(df[col_name]).str.replace('-', '.', regex=False)
     return df
@@ -149,7 +154,6 @@ def create_plate_df():
 
     return df
 
-
 # Try to fix the issue of different lower/upper case col header
 def manage_columns_typo(df):
     return df.columns.str.strip().str.lower()
@@ -176,30 +180,26 @@ def cells_to_highlight(df, star_run):
     current_df = df[df[STAR_RUN_COL] == star_run]
 
     for _, row in current_df.iterrows():
-
         cells.append(row[SAMPLES_CODES_COL])
-
         cells_positions[row[TARGET_POSITION_COL]] = row[SAMPLES_CODES_COL]
 
- 
 
     return cells, cells_positions
 
 def populate_table(d, table, col):
-
     for key, value in d.items():
-
         table.loc[key, col] = value
 
 def create_new_tables_sheet(writer, tables, sheet_name):
-
     rows = []
+
     for key, df in tables.items():
         rows.append([key,'',''])
         rows.append(['','',SOURCE_NAME_COL])
 
         for index, row in df.iterrows():
             rows.append(['', index, row.values[0]])
+
         rows.append(['','',''])
 
     result_df = pd.DataFrame(rows, columns=[None, None, None])
@@ -207,7 +207,6 @@ def create_new_tables_sheet(writer, tables, sheet_name):
 
 def get_position(df, star_run):
     cells_positions = []
-
     current_df = df[df[STAR_RUN_COL] == star_run]
 
     for _, row in current_df.iterrows():
@@ -262,8 +261,8 @@ def create_tables(data_folder, df_sorted, output_file, bad_quality_samples=None)
     tables_by_run_cleaned = {}      # tables with dropna
     tables_cleaned_for_plates = {}  # tables cleaned to Myra plates view (96w)
 
-
     with pd.ExcelWriter(output_file,  engine='openpyxl', mode='a') as writer:
+
         files = sort_files(data_folder)
         for file_name in files:
             cells = []
@@ -271,8 +270,10 @@ def create_tables(data_folder, df_sorted, output_file, bad_quality_samples=None)
             run_name = file_name.split('_')[1]
 
             # Create df like 96w plate A -> H (rows), 1 -> 12 (cols)
+
             df_plate = create_plate_df()
             df_table = create_table_df()
+
 
             file_name = os.path.join(data_folder, file_name)
 
@@ -281,20 +282,30 @@ def create_tables(data_folder, df_sorted, output_file, bad_quality_samples=None)
             df = read_table_file(file_name, ext)
             df.columns = manage_columns_typo(df)
 
-
             df = replace_hyphen_by_dot(df, SOURCE_BARCODE_COL)
-            df = df.dropna()  
+            # df = df.dropna()  
+
 
             for _, row in df.iterrows():
                 target_position = str(row[TARGET_POSITION_COL])
-                sample_code = row[SOURCE_BARCODE_COL]
-		    
+
+                # Upper both to prevent mismatchs, for ex, NM001 with nm001
+                sample_code = row[SOURCE_BARCODE_COL].upper()
+                df_sorted[SOURCE_BARCODE_COL] = df_sorted[SOURCE_BARCODE_COL].str.upper()
+
+               
+                '''
+                In df_plate, assign the value of sample_code to the cell located at:
+                    - Row: plate_row
+                    - Column: plate_col
+                '''
                 if target_position:
                     plate_row = target_position[0]
                     plate_col = target_position[1:]
 
                     df_plate.loc[plate_row, plate_col] = sample_code
 
+          
             cells, positions = cells_to_highlight(df_sorted, run_name)
 
             df_plate.to_excel(writer, sheet_name=run_name)
@@ -327,10 +338,11 @@ def create_tables(data_folder, df_sorted, output_file, bad_quality_samples=None)
 # If we dont have sample for a position, the cell will be empty
 
 def create_tables_myra_input(tables, outp, sheetname):    
+
     try:
         with pd.ExcelWriter(outp,  engine='openpyxl', mode='a') as writer:
-            create_new_tables_sheet(writer, tables, sheetname)
 
+            create_new_tables_sheet(writer, tables, sheetname)
     except Exception as e:
         print(f'[Myra input tables] : Failed to create table for {f}/n{e}')
 
@@ -339,7 +351,6 @@ def create_tables_myra_input(tables, outp, sheetname):
 # For each run ('star' files), remove the empties
 
 def cleaning_run_empties(df, column_name):
-
     return df.replace('', None).dropna()[column_name].tolist()
 
 # We want to create plates of 96w based on Myra input filled vertically.
@@ -366,44 +377,71 @@ def create_empty_table(ws, start_row=2, end_row=10):
     blue_fill = PatternFill(start_color="87CEEB", fill_type="solid")
 
     for col in range(2, 14):  # Style header row (1-12)
-
         ws.cell(row=start_row, column=col).fill = blue_fill
 
- 
-
     for row in range(start_row, end_row+1):  # Style index column (A-H)
-
         ws.cell(row=row, column=1).fill = blue_fill
 
 def fill_cell(ws, row, col, val, color=None):
+
     if color:
         ws.cell(row=row, column=col, value=val).fill = color
     else:
         ws.cell(row=row, column=col, value=val)
 
 def fill_well_plates(inp, wb):
+
     start_row = 3   # One row for the plate number, one for the header and we start from 3
+
     current_row, current_col = start_row, 1
+
     plate_number = 1
 
+ 
+
     ws = wb.create_sheet(title="Myra")  
+
+   
+
     fill_cell(ws=ws, row=1, col=current_col, val=f"Plate {plate_number}")
+
+   
 
     create_empty_table(ws)
 
+   
+
     count = 0       # keep track of the row iteration
+
     for idx, (key, values) in enumerate(inp.items()):
+
         color = PatternFill(start_color=pastel_colors[idx], fill_type="solid")  
+
+ 
+
         for value in values:
+
+ 
+
             fill_cell(
+
                 ws=ws,
+
                 row=current_row,
+
                 col=current_col + 1,
+
                 val=value,
+
                 color=color)
 
+           
+
             current_row += 1
+
             count += 1
+
+ 
 
             if count == 8:  # If end of rows (A-H) is reached
                 current_col += 1
@@ -493,6 +531,7 @@ EXTRACTION_DATE       = 'Extraction Date'
 
 wd = os.path.dirname(os.path.realpath(__file__))
 results_dir = os.path.join(wd, 'results')
+# results_dir = os.path.join(wd, 'results_test')
 logs_dir = os.path.join(wd, 'logs')
 
 now = datetime.now()
@@ -507,13 +546,50 @@ logging.basicConfig(filename=log_file, level=logging.DEBUG,
 
 
 data_dir        = os.path.join(wd, 'data')
-results_file    = os.path.join(results_dir, f'results_{formatted_date}.xlsx')
+# data_dir        = os.path.join(wd, 'data_test')
+results_file    = os.path.join(results_dir, f'results_{formatted_import os
+import re
+from datetime import datetime
+import logging
+import warnings
+import numpy as np
+import pandas as pd
+from openpyxl import Workbook, load_workbook
+from openpyxl.styles import PatternFill
+
+'''
+Combine the sending file (WGS_XXXX) with 'star' files :
+    [0] Setup:
+        -> If .csv, convert to xl (we prefer to work with xl files).
+    [1] Fetch 'Samples codes' and 'Production date' columns.
+    	Check Sample Quality -if the samples did not pass the threshold:
+		-> 'Conc. Dilution Factor' <= 1 or
+		-> '260/280' < 1.7 or '260/280' > 2.2
+    [2] Concate Run files (Star_0XX) with the sending file (WGS_XXX):
+        	->  The 'Samples codes' of the sending files has to be = to
+            	the 'Source Barcode' of the run file
+    [3] Create Tables 96w like, and highlight to sample we need to run from each
+        table (in target position)
+    [4] Create inputs for running easily Myra program
+'''
+
+warnings.filterwarnings("ignore", category=UserWarning, module='openpyxl')
+
+RUN_FILE_PATTERN =  'star'
+
+def create_dir(d):
+    if not os.path.exists(d):
+
+        try:
+
+            os.makedirs(d)
+date}.xlsx')
 bad_quality_file    = os.path.join(results_dir, f'bad_quality_samples_{formatted_date}.xlsx')
 filtered_file   = 'filtered_result'
 concatened_file = 'concatenated_result'
 
 # Get all run files (can be xls, csvs, or together)
-runs_files = get_run_files(RUN_FILE_PATTERN, ('.xlsx', '.csv'))
+runs_files = get_files_start_with_pattern(RUN_FILE_PATTERN, ('.xlsx', '.csv'), data_dir)
 
 if not runs_files:
     logging.error(f"[0] Error occurred while fetching 'star' files\n")
@@ -521,7 +597,6 @@ if not runs_files:
 
 ################################################################
 ### [0] - Setup ###
-
 
 # If .csv, convert to xl (and remove csv files after convertion)
 # We prefer to work with xl files
@@ -532,15 +607,14 @@ if csv_files:
         try:
             convert_csv_to_xl(data_dir, f)
             os.remove(os.path.join(data_dir, f))
-            logging.info(f"[1.3] Successfully converted {f} to excel.\n")
+            logging.info(f"[0] Successfully converted {f} to excel.\n")
         except Exception as e:
-            msg = f"[2.1] Error occurred while converting {f} to excel: {e}\n"
+            msg = f"[0] Error occurred while converting {f} to excel: {e}\n"
             logging.error(msg)
             exit(msg)
 
 # After converting all files to xl, fetch again the run files with xl extention
-runs_files = get_run_files(RUN_FILE_PATTERN, '.xlsx')
-
+runs_files = get_files_start_with_pattern(RUN_FILE_PATTERN, '.xlsx', data_dir)
 
 #################################################################
 ### [1.1 - 1.2]-  Fetch 'WGS' file data, fetch 'Samples codes' and 'Production date' columns ###
@@ -561,21 +635,22 @@ except Exception as e:
 
 
 try:
-    df = pd.read_excel(sending_file, header=None)
-    
+    df_sending = pd.read_excel(sending_file, header=None)
+   
     # Reaching the table because it doesn't start from the first file row
     header_row = None
-    for i, row in df.iterrows():
+    for i, row in df_sending.iterrows():
         row_str = row.astype(str).str.strip().str.lower()   # fix upper/lower case issue
         if SERIAL_NUMBER_COL in row_str.values:
             header_row = i
             break
 
     if header_row is not None:
-        df = pd.read_excel(sending_file, header=header_row)
-        df.columns = manage_columns_typo(df)
+        df_sending = pd.read_excel(sending_file, header=header_row)
+        df_sending.columns = manage_columns_typo(df_sending)
 
-        null_rows = df[df[SAMPLES_CODES_COL].isna() | df[PRODUCTION_DATE_COL].isna()]
+
+        null_rows = df_sending[df_sending[SAMPLES_CODES_COL].isna() | df_sending[PRODUCTION_DATE_COL].isna()]
         
         if len(null_rows) > 0:
             msg = f'[1.2] Your data has null values:\n {null_rows}\n'
@@ -583,14 +658,14 @@ try:
             exit(msg)
 
 
-        columns = fetch_columns(df, [SAMPLES_CODES_COL, PRODUCTION_DATE_COL])
+        columns = fetch_columns(df_sending, [SAMPLES_CODES_COL, PRODUCTION_DATE_COL])
 
-        df_filtered = df[columns]
-        df_filtered = replace_hyphen_by_dot(df_filtered, SAMPLES_CODES_COL)
-        logging.info(f"[1.2] Successfully fetching header form'sending' file\n")
+        df_sending_filtered = df_sending[columns]
+        df_sending_filtered = replace_hyphen_by_dot(df_sending_filtered, SAMPLES_CODES_COL)
+        logging.info(f"[1.2] Successfully fetching header from 'sending' file\n")
 
     else:
-        logging.error(f"[1.2] Error occurred while fetching header form 'sending' file: {e}\n")
+        logging.error(f"[1.2] Error occurred while fetching header from 'sending' file: {e}\n")
 
         exit("Could not find the table header.")
 
@@ -598,32 +673,47 @@ except Exception as e:
     logging.error(f"[1.2] Error occurred while fetching header form'sending' file: {e}\n")
 
 
+
+
 #################################################################
 ### [1.3]- Detect sample metrics                              ###
-# Check files containinf 'Elab' or 'elab', and determin if the samples did not pass the threshold
-#   -> 'Conc. Dilution Factor' <= 1 or
-#   -> '260/280' <= 1.8 or '260/280' > 2.2
+# determin if the samples not passed the threshold
+#   -> 'Conc. Dilution Factor' <= 0.95 or
+#      '260/280' < 1.7 or 2.3 >='260/280'
+is_bad_quality_sample = False
+for filename in os.listdir(data_dir):
+    if  ELAB_FILE_PATTERN in filename.lower() and filename.endswith(('.xlsx', '.xls')):
+        is_bad_quality_sample = True
 
-combined_df = load_elab_data(data_dir, df_filtered)
+if is_bad_quality_sample:
+        bad_quality_combined_df = load_elab_data(data_dir, df_sending_filtered)
+        
+        elab_files = get_files_contains_pattern(ELAB_FILE_PATTERN, ('.xlsx', '.csv'), data_dir)
 
-# Ensure numeric conversion (in case columns are read as strings)
-combined_df['Conc. Dilution Factor'] = pd.to_numeric(combined_df['Conc. Dilution Factor'], errors='coerce')
-combined_df['260/280'] = pd.to_numeric(combined_df['260/280'], errors='coerce')
+        if len(runs_files) > len(elab_files):
+            msg = f"[1.3] !! {len(runs_files) - len(elab_files)} Varioscan elab file(s) missing.\n"
+            print(msg)
+            logging.info(msg)
 
-# Apply the filtering
-filtered_df = combined_df[
-    (combined_df['Conc. Dilution Factor'] <= 0.95) |
-    ((combined_df['260/280'] <= 1.8) | (combined_df['260/280'] > 2.2))
-]
+        # Ensure numeric conversion (in case columns are read as strings)
+        bad_quality_combined_df['Conc. Dilution Factor'] = pd.to_numeric(bad_quality_combined_df['Conc. Dilution Factor'], errors='coerce')
+        bad_quality_combined_df['260/280'] = pd.to_numeric(bad_quality_combined_df['260/280'], errors='coerce')
 
-bad_quality_samples = filtered_df['Sample'].dropna().astype(str).tolist()
+        # Apply the filtering
+        # Filtering the DataFrame
+        bad_quality_df = bad_quality_combined_df[ 
+            (bad_quality_combined_df['Conc. Dilution Factor'] <= 0.95) |
+            (bad_quality_combined_df['260/280'] < 1.599) |
+            (bad_quality_combined_df['260/280'] > 2.551)
+        ]
 
-filtered_df.to_excel(bad_quality_file, index=False)
+        bad_quality_samples = bad_quality_df['Sample'].dropna().astype(str).tolist()
+        bad_quality_df.to_excel(bad_quality_file, index=False)
 
 ###########################################################
 ### [2] - Concate Star_0XX files with the sending file ###
 
-df_results = df_filtered.copy()
+df_results = df_sending_filtered.copy()
 try:
     for r in runs_files:
         df_results = fetch_and_concatenate(df_results, data_dir, r)
@@ -640,10 +730,19 @@ null_rows = df_results[df_results[SOURCE_BARCODE_COL].isna() |
                df_results[TARGET_POSITION_COL].isna() |
                df_results[STAR_RUN_COL].isna()]
 
-if len(null_rows) > 0:    
-    msg = f'[2.2] Your data has null values: {null_rows}\n'
+if len(null_rows) > 0:
+    
+    # Prepare mapping: barcode -> run_name from df_sending
+    barcode_to_run = dict(zip(df_sending[SAMPLES_CODES_COL], df_sending[PRODUCTION_DATE_COL]))
+
+    null_rows['located'] = null_rows[SAMPLES_CODES_COL].map(barcode_to_run)
+    # Updated null rows with run name
+    # null_rows = df_results.loc[null_rows.index]
+
+    msg = f'[2.2] Your data has null values: \n{null_rows}\n'
     logging.error(msg)
     exit(msg)
+
 
 try:
     df_sorted = sort_df(df_results, STAR_RUN_COL)
@@ -655,7 +754,7 @@ except Exception as e:
 
 try:
     with pd.ExcelWriter(results_file, engine='openpyxl') as writer:
-        df_filtered.to_excel(writer, sheet_name=filtered_file, index=False)
+        df_sending_filtered.to_excel(writer, sheet_name=filtered_file, index=False)
         df_sorted.to_excel(writer, sheet_name=concatened_file, index=False)
         
         logging.info(f"[2.4] Successfully wrote excel table\n")
@@ -663,6 +762,7 @@ except Exception as e:
     msg = f"[2.4] Error occurred while writing excel table: {e}\n"
     logging.error(msg)
     exit(msg)
+
 
 ##############################################################
 ### [3] - Create Tables 96w like, and highlighted ###
